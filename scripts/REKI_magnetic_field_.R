@@ -10,6 +10,7 @@
 library(oce)
 library(sf)
 library(terra)
+# library(stars) this is another packages that might have advantages for combining raster and sf workflows
 library(tidyverse)
 select <- dplyr::select
 filer <- dplyr::filter 
@@ -30,12 +31,53 @@ data <- data %>%
          lat = as.numeric(sub(".*\\|", "", geometry))) %>% # also as.character
   select(-MIGRATION, -geometry)
 
+# create column which tells whether the current migration was the first autumn migration 
+data <- data %>%
+  group_by(id) %>%
+  mutate(
+    first_migration = cumsum(migration == 'migratory' & lag(migration, default = 'stationary') != 'migratory'),
+    first_migration = ifelse(migration == 'migratory', first_migration, NA)) %>%
+  ungroup() 
+data <- data %>% 
+  group_by(id) %>% 
+  filter(migration == 'migratory') %>% 
+  mutate(
+    first_migration = if_else(year(timestamp) == year(min(timestamp, na.rm = TRUE)), 1, first_migration), 
+    first_migration = if_else(year(timestamp) == year(min(timestamp, na.rm = TRUE)) + 1 & timestamp < as.POSIXct(paste0(year(min(timestamp, na.rm = TRUE)) + 1, '-07-15 00:00:00'), format = "%Y-%m-%d %H:%M:%S"), 2, first_migration)) %>%
+  filter(first_migration %in% c(1,2)) %>% select(id, timestamp, first_migration) %>% 
+  right_join(data %>% select(-first_migration), by = join_by(id, timestamp))
+data %>% mutate(first_migration = case_when(first_migration == 1 ~ 'autumn', 
+                                             first_migration == 2 ~ 'spring', 
+                                            TRUE ~ as.character(first_migration)))
+
+# bring data in lomg format for easier plotting
+# data <- data %>% pivot_longer(cols = c(inclination, declination, intensity),
+#                              names_to = "Type",
+#                              values_to = "Value")
+
+summary(data$block)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 2. Create a raster for the migration route of REKI's  --------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-rast
+# create binding box 
+bbox <- terra::ext(range(data$long), range(data$lat))
+
+# create raster with geographic CRS for Europe where grid cell size varies with location
+rast <- rast(ext = bbox, resolution = 0.5, crs = "EPSG:4258")
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 3. Get magnetic field values for autum migration  --------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# calculate mean autumn migration date 
+data %>% 
+  ggplot()+ 
+  geom_line(mapping = aes(x = timestamp, y = inclination, color = migration)) + 
+  facet_wrap(~id)
+
+
 
 ######################################################
 #### STEPS SUGGESTED BY STEFFEN ######################
