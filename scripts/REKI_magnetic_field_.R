@@ -38,6 +38,7 @@ data <- data %>%
     first_migration = cumsum(migration == 'migratory' & lag(migration, default = 'stationary') != 'migratory'),
     first_migration = ifelse(migration == 'migratory', first_migration, NA)) %>%
   ungroup() 
+
 data <- data %>% 
   group_by(id) %>% 
   filter(migration == 'migratory') %>% 
@@ -46,16 +47,18 @@ data <- data %>%
     first_migration = if_else(year(timestamp) == year(min(timestamp, na.rm = TRUE)) + 1 & timestamp < as.POSIXct(paste0(year(min(timestamp, na.rm = TRUE)) + 1, '-07-15 00:00:00'), format = "%Y-%m-%d %H:%M:%S"), 2, first_migration)) %>%
   filter(first_migration %in% c(1,2)) %>% select(id, timestamp, first_migration) %>% 
   right_join(data %>% select(-first_migration), by = join_by(id, timestamp))
-data %>% mutate(first_migration = case_when(first_migration == 1 ~ 'autumn', 
-                                             first_migration == 2 ~ 'spring', 
-                                            TRUE ~ as.character(first_migration)))
 
-# bring data in lomg format for easier plotting
+data <- data %>% mutate(first_migration = factor(case_when(first_migration == 1 ~ 'autumn', 
+                                             first_migration == 2 ~ 'spring', 
+                                            TRUE ~ as.character(first_migration))))
+
+View(data)
+# bring data in long format for easier plotting
 # data <- data %>% pivot_longer(cols = c(inclination, declination, intensity),
 #                              names_to = "Type",
 #                              values_to = "Value")
 
-summary(data$block)
+summary(data$first_migration)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 2. Create a raster for the migration route of REKI's  --------
@@ -72,12 +75,10 @@ rast <- rast(ext = bbox, resolution = 0.5, crs = "EPSG:4258")
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # calculate mean autumn migration date 
-data %>% 
-  ggplot()+ 
-  geom_line(mapping = aes(x = timestamp, y = inclination, color = migration)) + 
-  facet_wrap(~id)
+data %>% filter(first_migration == 'autumn') %>% group_by(id) %>% summarise(mean_autumn = mean(timestamp))
 
-
+# calculate magnetic field values for 
+data$inclination <- oce::magneticField(longitude = )
 
 ######################################################
 #### STEPS SUGGESTED BY STEFFEN ######################
@@ -93,4 +94,7 @@ data %>%
 
 
 
-plot(x = data$long, y = data$lat)
+data %>% drop_na(first_migration) %>%
+  ggplot()+ 
+  geom_line(mapping = aes(x = timestamp, y = inclination, color = first_migration)) + 
+  facet_wrap(~id, scales = 'free')
