@@ -71,14 +71,45 @@ bbox <- terra::ext(range(data$long), range(data$lat))
 rast <- rast(ext = bbox, resolution = 0.5, crs = "EPSG:4258")
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 3. Get magnetic field values for autum migration  --------
+# 3. Get magnetic field values for autumn migration  --------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# calculate mean autumn migration date 
-data %>% filter(first_migration == 'autumn') %>% group_by(id) %>% summarise(mean_autumn = mean(timestamp))
+# calculate mean autumn migration date a
+data <- data %>%
+  group_by(id) %>%
+  mutate(mean_autumn = if_else(first_migration == 'autumn', 
+                               mean(timestamp[first_migration == 'autumn'], na.rm = TRUE), 
+                               as.POSIXct(NA)))
 
-# calculate magnetic field values for 
-data$inclination <- oce::magneticField(longitude = )
+# create df to extract magnetic field values for autumn migration for every bird 
+
+birds <- unique(data$id) # get ids from all birds 
+mean_autumn <- data %>% filter(first_migration == 'autumn') %>% group_by(id) %>% summarise(mean_autumn = mean(timestamp)) # get mean autumn migration dates 
+
+df_rast <- as.data.frame(xyFromCell(rast, 1:ncell(rast))) # get the coordinated from raster
+df_rast <- df_rast %>% rename(long = x, lat = y) # rename raster
+
+df_rast <- data.frame(long = rep(df_rast$long, times = length(birds)), 
+                      lat = rep(df_rast$lat, times = length(birds)), 
+                      id = rep(birds, each = length(df_rast$long)))
+
+df_rast <- df_rast %>% left_join(mean_autumn, by = join_by(id)) # add the mean_autumn migration dates 
+
+for(i in 1:10){
+  df_rast$inclination[i] <- magneticField(longitude = df_rast$long[i], latitude = df_rast$lat, time = df_rast$mean_autumn)$inclination[1]
+  df_rast$declination[i] <- magneticField(longitude = df_rast$long[i], latitude = df_rast$lat, time = df_rast$mean_autumn)$declination[1]
+  df_rast$intensity[i] <- magneticField(longitude = df_rast$long[i], latitude = df_rast$lat, time = df_rast$mean_autumn)$intensity[1]
+}
+
+df_rast <- df_rast %>%
+  rowwise() %>%
+  mutate(
+    magnetic = list(magneticField(longitude = long, latitude = lat, time = mean_autumn)),
+    inclination = magnetic$inclination,
+    declination = magnetic$declination,
+    intensity = magnetic$intensity) %>%
+  select(-magnetic) %>%  # Remove the list column
+  ungroup()
 
 ######################################################
 #### STEPS SUGGESTED BY STEFFEN ######################
@@ -96,5 +127,5 @@ data$inclination <- oce::magneticField(longitude = )
 
 data %>% drop_na(first_migration) %>%
   ggplot()+ 
-  geom_line(mapping = aes(x = timestamp, y = inclination, color = first_migration)) + 
+  geom_point(mapping = aes(x = timestamp, y = inclination, color = first_migration), size = 0.5) + 
   facet_wrap(~id, scales = 'free')
