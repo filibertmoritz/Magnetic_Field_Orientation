@@ -1,4 +1,9 @@
+# defaults from 
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
+
+# manually set
+data/ # don't track data file 
+.png # don't track any png-files
