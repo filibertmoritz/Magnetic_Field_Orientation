@@ -52,14 +52,6 @@ data <- data %>% mutate(first_migration = factor(case_when(first_migration == 1 
                                              first_migration == 2 ~ 'spring', 
                                             TRUE ~ as.character(first_migration))))
 
-
-# bring data in long format for easier plotting
-# data <- data %>% pivot_longer(cols = c(inclination, declination, intensity),
-#                              names_to = "Type",
-#                              values_to = "Value")
-
-summary(data$first_migration)
-
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 2. Create a raster for the migration route of REKI's  --------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -68,7 +60,7 @@ summary(data$first_migration)
 bbox <- terra::ext(range(data$long), range(data$lat))
 
 # create raster with geographic CRS for Europe where grid cell size varies with location
-rast <- rast(ext = bbox, resolution = 0.5, crs = "EPSG:4258")
+rast <- rast(ext = bbox, resolution = 0.5, crs = "EPSG:4258") # not sure if maybe the world EPSG would be better, just replace by 'EPSG:4326'
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 3. Get magnetic field values for first spring migration in raster  --------
@@ -98,6 +90,7 @@ df_rast <- data.frame(long = rep(df_rast$long, times = length(birds)),
 
 df_rast <- df_rast %>% left_join(mean_spring, by = join_by(id)) # add the mean_spring migration dates 
 
+# get magnetic field values for mean date of each birds first spring migration
 df_rast$inclination <- magneticField(longitude = df_rast$long, latitude = df_rast$lat, time = df_rast$mean_spring)$inclination
 df_rast$declination <- magneticField(longitude = df_rast$long, latitude = df_rast$lat, time = df_rast$mean_spring)$declination
 df_rast$intensity <- magneticField(longitude = df_rast$long, latitude = df_rast$lat, time = df_rast$mean_spring)$intensity
@@ -120,6 +113,8 @@ data_autumn$intensity <- magneticField(longitude = data_autumn$long, latitude = 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # round values which represents birds ability to sense magnetic field values, ATTENTION: only autumn migration magnetic field values are rounded, not spring migration
+# information on ability to sense magnetic field values used form Schneider et al. (2023) https://www.nature.com/articles/s42003-023-04530-w
+# used the narrower/more optimistic uncertainties, which in the end lead to narrower bands of locations the birds already experienced - leads to more conservative outcomes 
 data_autumn$declination_max <- data_autumn$declination + 0.5 # declination sensitivity 0.5
 data_autumn$declination_min <- data_autumn$declination - 0.5 
 data_autumn$inclination_max <- data_autumn$inclination + 0.5 # inclination sensitivity 0.5
@@ -130,44 +125,29 @@ data_autumn$intensity_min <- data_autumn$intensity - 200
 # create one df of data_autumn and df_rast from spring migration for comparison
 overlap <- df_rast %>% left_join(data_autumn %>% select(-long, -lat, -mean_spring), by = join_by(id), suffix = c('_spring', '_autumn')) %>% 
   select(-migration, -first_migration, -distance_to_next, -speed) %>% 
-  mutate(match_inclination = inclination_spring >= inclination_min & inclination_spring <= inclination_max, 
+  mutate(match_inclination = inclination_spring >= inclination_min & inclination_spring <= inclination_max, # create a column that checks whether inclination from spring lies between max and min of autumn migration
          match_declination = declination_spring >= declination_min & declination_spring <= declination_max,
          match_intensity = intensity_spring >= intensity_min & intensity_spring <= intensity_max, 
-         match_all = match_inclination & match_declination & match_intensity) %>% 
+         match_all = match_inclination & match_declination & match_intensity) %>% # creates a TRUE if all other columns above are TRUE
   select(-match_inclination, -match_declination, -match_intensity) %>% 
-  filter(match_all == TRUE) 
+  filter(match_all == TRUE) # romve all grid cells that are not needed
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 5. Plot data --------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# get information on raster 
-str(rast)
-dim(rast)
-
 # create a plot 
-overlap %>% 
-  filter(id == 'REKI_104') %>% 
-  ggplot() + 
-  geom_point(mapping = aes(x = long, y = lat), size = 2) +
-  coord_equal()
+ggplot() + 
+  geom_point(data = overlap, 
+             mapping = aes(x = long, y = lat, color = 'Experienced Magentic Field in Autumn'), size = 2) +
+  geom_path(data = data %>% filter(first_migration == 'spring'), 
+            mapping = aes(x = long, y = lat, color = 'Spring Migration')) +
+  coord_equal() + 
+  facet_wrap(~id) +
+  labs(title = "Experienced Magnetic Field During Autumn Migraion and Spring Migration route for ten Red Kites",
+    x = "Longitude",
+    y = "Latitude") +
+  scale_color_manual(name = 'Legend', values = c('Experienced Magentic Field in Autumn' = 'grey80', 'Spring Migration' = 'red')) +
+  theme_bw() + 
+  theme(legend.position = c(0.75,0.12))
 
-
-######################################################
-#### STEPS SUGGESTED BY STEFFEN ######################
-######################################################
-
-# 1. Ein 50 km raster über die bounding box des Zugweges erstellen, und dann für einen mittleren Tag während des Frühjahrszuges das magneticField für alle diese Rasterpunkte mit oce::magneticField die dec,inc, int Werte extrahieren
-# 2. Für jeden Herbstzug (und Vogel), die inc, dec, und int Werte aller locations auf eine Toleranz runden welche der Wahrnehmungsfähigkeit entspricht (z.B. 0.5 für dec, die anderen müsste man nachschauen oder fragen).
-# 3. Nach dem runden die unique() combinations aus inc, dec und int heraussuchen (geht zur Not mit paste, dann unique).
-# 4. Das Raster über den Zugweg mit der gleichen sensitivität runden und auch die inc_dec, int Werte zusammen-pasten in einen Wert.
-# 5. Für jede unique inc/dec/int combination alle locations aus dem raster rausfiltern die den gleichen (pasted) Wert von inc/dec/int haben. All diese Rasterzellen auf einer Karte einfärben.
-# 6. Frühjahrszug des selben Vogels auf Karte plotten und checken ob die Route die eingefärbten Rasterzellen verlässt. Geht auch mit sf::st_within um festzustellen ob die locations innerhalb dieser zellen liegen.
-# 7. Loop über alle Individuen machen und solange in die Berge gehen 
-
-
-
-data %>% drop_na(first_migration) %>%
-  ggplot()+ 
-  geom_point(mapping = aes(x = timestamp, y = inclination, color = first_migration), size = 0.5) + 
-  facet_wrap(~id, scales = 'free')
