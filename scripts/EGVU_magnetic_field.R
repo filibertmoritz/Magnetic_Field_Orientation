@@ -103,7 +103,7 @@ data <- data %>% mutate(first_migration = factor(case_when(first_migration == 1 
 bbox <- terra::ext(range(data$long), range(data$lat))
 
 # create raster with geographic CRS for Europe where grid cell size varies with location
-rast <- rast(ext = bbox, resolution = 0.5, crs = "EPSG:4258") # not sure if maybe the world EPSG would be better, just replace by 'EPSG:4326'
+rast <- rast(ext = bbox, resolution = 0.5, crs = "EPSG:4326") # not sure if maybe the world EPSG would be better, just replace by 'EPSG:4326'
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 4. Get magnetic field values for first spring migration in raster  --------
