@@ -29,7 +29,7 @@ data <- data %>%
          migration = as.factor(if_else(MIGRATION == 'migrating', 'migratory', 'stationary')),
          long = as.numeric(sub("\\|.*", "", geometry)), 
          lat = as.numeric(sub(".*\\|", "", geometry))) %>% # also as.character
-  select(-MIGRATION, -geometry)
+  select(-MIGRATION, -geometry, -inclination, -declination, -intensity)
 
 # create column which tells whether the current migration was the first autumn migration 
 data <- data %>%
@@ -52,7 +52,7 @@ data <- data %>% mutate(first_migration = factor(case_when(first_migration == 1 
                                              first_migration == 2 ~ 'spring', 
                                             TRUE ~ as.character(first_migration))))
 
-View(data)
+
 # bring data in long format for easier plotting
 # data <- data %>% pivot_longer(cols = c(inclination, declination, intensity),
 #                              names_to = "Type",
@@ -71,45 +71,87 @@ bbox <- terra::ext(range(data$long), range(data$lat))
 rast <- rast(ext = bbox, resolution = 0.5, crs = "EPSG:4258")
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 3. Get magnetic field values for autumn migration  --------
+# 3. Get magnetic field values for first spring migration in raster  --------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # calculate mean autumn migration date a
 data <- data %>%
   group_by(id) %>%
-  mutate(mean_autumn = if_else(first_migration == 'autumn', 
-                               mean(timestamp[first_migration == 'autumn'], na.rm = TRUE), 
+  mutate(mean_spring = if_else(first_migration == 'spring', 
+                               mean(timestamp[first_migration == 'spring'], na.rm = TRUE), 
                                as.POSIXct(NA)))
 
 # create df to extract magnetic field values for autumn migration for every bird 
 
 birds <- unique(data$id) # get ids from all birds 
-mean_autumn <- data %>% filter(first_migration == 'autumn') %>% group_by(id) %>% summarise(mean_autumn = mean(timestamp)) # get mean autumn migration dates 
+mean_spring <- data %>% filter(first_migration == 'spring') %>% group_by(id) %>% summarise(mean_spring = mean(timestamp)) # get mean autumn migration dates 
 
 df_rast <- as.data.frame(xyFromCell(rast, 1:ncell(rast))) # get the coordinated from raster
 df_rast <- df_rast %>% rename(long = x, lat = y) # rename raster
 
 df_rast <- data.frame(long = rep(df_rast$long, times = length(birds)), 
                       lat = rep(df_rast$lat, times = length(birds)), 
-                      id = rep(birds, each = length(df_rast$long)))
+                      id = rep(birds, each = nrow(df_rast)),
+                      inclination = NA, 
+                      declination = NA, 
+                      intensity = NA)
 
-df_rast <- df_rast %>% left_join(mean_autumn, by = join_by(id)) # add the mean_autumn migration dates 
+df_rast <- df_rast %>% left_join(mean_spring, by = join_by(id)) # add the mean_spring migration dates 
 
-for(i in 1:10){
-  df_rast$inclination[i] <- magneticField(longitude = df_rast$long[i], latitude = df_rast$lat, time = df_rast$mean_autumn)$inclination[1]
-  df_rast$declination[i] <- magneticField(longitude = df_rast$long[i], latitude = df_rast$lat, time = df_rast$mean_autumn)$declination[1]
-  df_rast$intensity[i] <- magneticField(longitude = df_rast$long[i], latitude = df_rast$lat, time = df_rast$mean_autumn)$intensity[1]
-}
+df_rast$inclination <- magneticField(longitude = df_rast$long, latitude = df_rast$lat, time = df_rast$mean_spring)$inclination
+df_rast$declination <- magneticField(longitude = df_rast$long, latitude = df_rast$lat, time = df_rast$mean_spring)$declination
+df_rast$intensity <- magneticField(longitude = df_rast$long, latitude = df_rast$lat, time = df_rast$mean_spring)$intensity
 
-df_rast <- df_rast %>%
-  rowwise() %>%
-  mutate(
-    magnetic = list(magneticField(longitude = long, latitude = lat, time = mean_autumn)),
-    inclination = magnetic$inclination,
-    declination = magnetic$declination,
-    intensity = magnetic$intensity) %>%
-  select(-magnetic) %>%  # Remove the list column
-  ungroup()
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 3. Get magnetic field values for first autumn migration for all locations of each bird --------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# filter for autumn migration
+data_autumn <- data %>% 
+  filter(first_migration == 'autumn') 
+
+# get magnetic field values for all locations in first autumn migration
+data_autumn$declination <- magneticField(longitude = data_autumn$long, latitude = data_autumn$lat, time = data_autumn$timestamp)$declination
+data_autumn$inclination <- magneticField(longitude = data_autumn$long, latitude = data_autumn$lat, time = data_autumn$timestamp)$inclination
+data_autumn$intensity <- magneticField(longitude = data_autumn$long, latitude = data_autumn$lat, time = data_autumn$timestamp)$intensity
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 4. Get information of grid cells where autumn migration values lied within spring migration  --------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# round values which represents birds ability to sense magnetic field values, ATTENTION: only autumn migration magnetic field values are rounded, not spring migration
+data_autumn$declination_max <- data_autumn$declination + 0.5 # declination sensitivity 0.5
+data_autumn$declination_min <- data_autumn$declination - 0.5 
+data_autumn$inclination_max <- data_autumn$inclination + 0.5 # inclination sensitivity 0.5
+data_autumn$inclination_min <- data_autumn$inclination - 0.5 
+data_autumn$intensity_max <- data_autumn$intensity + 200 # intensity sensitivity 200
+data_autumn$intensity_min <- data_autumn$intensity - 200
+
+# create one df of data_autumn and df_rast from spring migration for comparison
+overlap <- df_rast %>% left_join(data_autumn %>% select(-long, -lat, -mean_spring), by = join_by(id), suffix = c('_spring', '_autumn')) %>% 
+  select(-migration, -first_migration, -distance_to_next, -speed) %>% 
+  mutate(match_inclination = inclination_spring >= inclination_min & inclination_spring <= inclination_max, 
+         match_declination = declination_spring >= declination_min & declination_spring <= declination_max,
+         match_intensity = intensity_spring >= intensity_min & intensity_spring <= intensity_max, 
+         match_all = match_inclination & match_declination & match_intensity) %>% 
+  select(-match_inclination, -match_declination, -match_intensity) %>% 
+  filter(match_all == TRUE) 
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 5. Plot data --------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# get information on raster 
+str(rast)
+dim(rast)
+
+# create a plot 
+overlap %>% 
+  filter(id == 'REKI_104') %>% 
+  ggplot() + 
+  geom_point(mapping = aes(x = long, y = lat), size = 2) +
+  coord_equal()
+
 
 ######################################################
 #### STEPS SUGGESTED BY STEFFEN ######################
